@@ -25,6 +25,6 @@ public class LeaveValidationRequestDto { // Đổi tên từ DTO của LeaveServ
     private LocalDate requestedStartDate;
     @NotNull @FutureOrPresent
     private LocalDate requestedEndDate;
-    @NotNull @Positive
-    private BigDecimal requestedDaysInputByEmployee; // Số ngày nhân viên nhập, LeaveService sẽ tính lại ngày làm việc
+//    @NotNull @Positive
+//    private BigDecimal requestedDaysInputByEmployee; // Số ngày nhân viên nhập, LeaveService sẽ tính lại ngày làm việc
 }

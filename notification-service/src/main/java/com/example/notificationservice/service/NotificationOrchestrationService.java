@@ -64,7 +64,7 @@ public class NotificationOrchestrationService {
             switch (log.getChannelUsed().toUpperCase()) {
                 case "EMAIL":
                     sentSuccessfully = emailSendingService.sendEmail(
-                            cmd.getRecipientIdentifier(), // Giả sử đây là email
+                            cmd.getRecipientIdentifier().trim(), // Giả sử đây là email
                             processedSubject,
                             processedBody
                     );

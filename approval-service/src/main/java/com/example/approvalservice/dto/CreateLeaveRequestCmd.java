@@ -23,10 +23,11 @@ public class CreateLeaveRequestCmd {
     private LocalDate plannedStartDate;
     @NotNull @FutureOrPresent
     private LocalDate plannedEndDate;
-    @NotNull @Positive
-    private BigDecimal requestedNumberOfDays;
+//    @NotNull @Positive
+//    private BigDecimal requestedNumberOfDays;
     private String reasonForLeaveRequest;
     @NotBlank
     private String initialStatus; // Ví dụ: PENDING_VALIDATION
+
     private String orchestratingSagaId; // LRS sẽ cung cấp
 }

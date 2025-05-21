@@ -14,7 +14,7 @@ import java.util.UUID;
 @Getter
 @Setter
 @Entity
-@Table(name = "LeaveRequest") // Khớp với database.txt
+@Table(name = "LeaveRequest")
 public class LeaveRequest {
 
     @Id
@@ -39,8 +39,8 @@ public class LeaveRequest {
     @Column(name = "planned_end_date", nullable = false)
     private LocalDate plannedEndDate; // Date_Type
 
-    @Column(name = "requested_number_of_days", precision = 10, scale = 2)
-    private BigDecimal requestedNumberOfDays; // Decimal_Type
+//    @Column(name = "requested_number_of_days", precision = 10, scale = 2)
+//    private BigDecimal requestedNumberOfDays; // Decimal_Type
 
     @Column(name = "reason_for_leave_request", columnDefinition = "TEXT")
     private String reasonForLeaveRequest; // Text_Type

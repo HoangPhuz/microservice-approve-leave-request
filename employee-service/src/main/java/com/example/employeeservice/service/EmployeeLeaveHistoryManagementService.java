@@ -37,6 +37,8 @@ public class EmployeeLeaveHistoryManagementService {
                 .collect(Collectors.toList());
     }
 
+
+
     // Hàm mapper thủ công ví dụ
     private EmployeeLeaveHistoryDto convertToLeaveHistoryDto(EmployeeLeaveHistory entity) {
         if (entity == null) return null;

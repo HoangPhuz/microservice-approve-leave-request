@@ -17,13 +17,14 @@ public class CreateLeaveRequestInApprovalCmd {
     @NotBlank
     private String requestingEmployeeId;
     @NotBlank
-    private String leaveTypeCode;
+    private String requestedLeaveTypeCode;;
     @NotNull
     private LocalDate plannedStartDate;
     @NotNull
     private LocalDate plannedEndDate;
-    @NotNull @Positive
-    private BigDecimal requestedNumberOfDays; // Số ngày nhân viên nhập ban đầu
+//    @NotNull @Positive
+//    private BigDecimal requestedNumberOfDays; // Số ngày nhân viên nhập ban đầu
+
     private String reasonForLeaveRequest;
     @NotBlank
     private String initialStatus; // Ví dụ: PENDING_VALIDATION

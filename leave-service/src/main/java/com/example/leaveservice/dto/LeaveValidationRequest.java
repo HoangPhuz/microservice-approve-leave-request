@@ -21,6 +21,6 @@ public class LeaveValidationRequest {
     private LocalDate requestedStartDate;
     @NotNull @FutureOrPresent
     private LocalDate requestedEndDate;
-    @NotNull @Positive
-    private BigDecimal requestedDays; // Số ngày yêu cầu (đã được tính toán cơ bản bởi LRS)
+//    @NotNull @Positive
+//    private BigDecimal requestedDaysInputByEmployee; // Số ngày yêu cầu (đã được tính toán cơ bản bởi LRS)
 }

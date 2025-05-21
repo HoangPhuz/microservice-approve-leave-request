@@ -13,8 +13,8 @@ public class CreateLeaveRequestCmd {
     private LocalDate startDate;
     @NotNull @FutureOrPresent
     private LocalDate endDate;
-    @NotNull @Positive
-    private BigDecimal numberOfDays; // Số ngày nhân viên nghĩ họ đang xin
+//    @NotNull @Positive
+//    private BigDecimal numberOfDays; // Số ngày nhân viên nghĩ họ đang xin
     @Size(max = 1000)
     private String reason;
 }

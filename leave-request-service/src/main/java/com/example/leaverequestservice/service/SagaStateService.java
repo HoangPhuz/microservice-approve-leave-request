@@ -1,9 +1,12 @@
 package com.example.leaverequestservice.service;
 
+import com.example.leaverequestservice.dto.saga.LeaveRequestSagaPayload;
 import com.example.leaverequestservice.entity.SagaInstance;
 import com.example.leaverequestservice.entity.SagaStepLog;
 import com.example.leaverequestservice.repository.SagaInstanceRepository;
 import com.example.leaverequestservice.repository.SagaStepLogRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper; // Jackson cho JSON
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -38,6 +41,8 @@ public class SagaStateService {
         return sagaInstanceRepository.save(saga);
     }
 
+
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void updateSagaState(String sagaId, String currentStep, String status, String errorDetails, String payloadData) { // Nhận String
         SagaInstance saga = sagaInstanceRepository.findById(sagaId)
@@ -46,8 +51,27 @@ public class SagaStateService {
         saga.setSagaStatus(status);
         if (payloadData != null) { // Chỉ cập nhật payload nếu được cung cấp
             saga.setSagaPayloadData(payloadData);
+
+            try {
+                // Tạo ObjectMapper để đọc JSON từ chuỗi
+                JsonNode rootNode = objectMapper.readTree(payloadData);
+                // Lấy giá trị leaveRequestId
+                JsonNode leaveRequestIdNode = rootNode.get("leaveRequestId");
+                if(leaveRequestIdNode != null || leaveRequestIdNode.isNull()==false){
+                    saga.setCorrelationId(leaveRequestIdNode.asText());
+                }
+            } catch (JsonProcessingException e) {
+                e.printStackTrace();
+            }
         }
         // ... (phần còn lại của hàm) ...
+        if ("COMPLETED".equalsIgnoreCase(status) ||
+                "FAILED_NO_RETRY".equalsIgnoreCase(status) ||
+                "COMPENSATED".equalsIgnoreCase(status)) {
+            if (saga.getSagaCompletedAt() == null) { // Chỉ cập nhật nếu chưa được set
+                saga.setSagaCompletedAt(LocalDateTime.now());
+            }
+        }
         sagaInstanceRepository.save(saga);
         logStep(saga, currentStep, status, errorDetails);
     }

@@ -12,5 +12,5 @@ import org.springframework.web.bind.annotation.RequestBody;
 public interface LeaveServiceClient {
 
     @PostMapping("/validate")
-    ResponseEntity<LeaveValidationResponseDto> validateLeave(@RequestBody LeaveValidationRequestDto request);
+    ResponseEntity<LeaveValidationResponseDto> validateLeaveRequest(@RequestBody LeaveValidationRequestDto request);
 }

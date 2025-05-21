@@ -25,7 +25,7 @@ public class NotificationController {
     }
 
     @PostMapping("/send")
-    public ResponseEntity<Void> sendNotification(@Valid @RequestBody SendNotificationCmd command) {
+    public ResponseEntity<Void> sendNotification(@RequestBody SendNotificationCmd command) {
         try {
             // Việc gửi có thể bất đồng bộ (ví dụ: đưa vào queue nội bộ của NotificationService)
             // Hoặc đồng bộ như hiện tại. Nếu LRS không cần đợi kết quả gửi thành công ngay:

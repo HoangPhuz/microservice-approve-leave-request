@@ -34,7 +34,7 @@ public class LeaveRequestController {
             return ResponseEntity.status(HttpStatus.ACCEPTED)
                     .body(Map.of("message", "Leave request submitted. Processing...",
                             "sagaId", sagaId
-                            // "leaveRequestId", requestIdFromSagaPayload // (Tùy chọn)
+//                             "leaveRequestId", requestIdFromSagaPayload // (Tùy chọn)
                     ));
         } catch (IllegalArgumentException e) { // Ví dụ, nếu ID nhân viên không hợp lệ từ service
             logger.warn("Bad request for createLeaveRequest: {}", e.getMessage());

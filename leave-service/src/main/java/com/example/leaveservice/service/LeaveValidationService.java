@@ -208,7 +208,7 @@ public class LeaveValidationService {
             );
         }
 
-        if (businessDaysInRequest.compareTo(BigDecimal.ZERO) <= 0 && request.getRequestedDays().compareTo(BigDecimal.ZERO) > 0) {
+        if (businessDaysInRequest.compareTo(BigDecimal.ZERO) <= 0) {
             response.setValid(false);
             response.getValidationMessages().add("Calculated business days in request is zero or negative, while requested days is positive. Please check dates.");
         }
@@ -240,7 +240,6 @@ public class LeaveValidationService {
         // Trả về DTO mặc định nếu không lấy được hoặc lỗi
         EmployeeLeaveBalanceDto defaultDto = new EmployeeLeaveBalanceDto();
         defaultDto.setTotalDaysAllocated(BigDecimal.ZERO);
-        // Không set daysTaken, remainingDays vì chúng không có trong balance entity của EmployeeService
         return defaultDto;
     }
 

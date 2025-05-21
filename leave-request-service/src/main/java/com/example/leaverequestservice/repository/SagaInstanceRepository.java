@@ -6,5 +6,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 
 public interface SagaInstanceRepository extends JpaRepository<SagaInstance, String> {
-    List<SagaInstance> findByCorrelationIdAndSagaStatus(String correlationId, String expectedStatus);
+    List<SagaInstance> findByCorrelationIdAndCurrentSagaStepName(String correlationId, String expectedStatus);
 }

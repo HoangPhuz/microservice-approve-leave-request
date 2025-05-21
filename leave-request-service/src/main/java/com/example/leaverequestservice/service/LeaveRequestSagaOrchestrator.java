@@ -1,408 +1,3 @@
-//package com.example.leaverequestservice.service;
-//
-//import com.example.leaverequestservice.client.*;
-//import com.example.leaverequestservice.dto.CreateLeaveRequestCmd;
-//import com.example.leaverequestservice.dto.DecisionType;
-//import com.example.leaverequestservice.dto.ManagerDecisionCmd;
-//import com.example.leaverequestservice.dto.ext.*; // Import các DTOs ext
-//import com.example.leaverequestservice.entity.SagaInstance;
-//import com.example.leaverequestservice.exception.ResourceNotFoundException;
-//import com.example.leaverequestservice.repository.SagaInstanceRepository;
-//import org.slf4j.Logger;
-//import org.slf4j.LoggerFactory;
-//import org.springframework.http.HttpStatus;
-//import org.springframework.http.ResponseEntity;
-//import org.springframework.stereotype.Service;
-//import org.springframework.transaction.annotation.Transactional; // Cho phương thức chính
-//
-//import java.math.BigDecimal;
-//import java.util.List;
-//import java.util.Map;
-//
-//@Service
-//public class LeaveRequestSagaOrchestrator {
-//    private static final Logger logger = LoggerFactory.getLogger(LeaveRequestSagaOrchestrator.class);
-//
-//    private final SagaStateService sagaStateService;
-//    private final EmployeeServiceClient employeeServiceClient;
-//    private final ApprovalServiceClient approvalServiceClient;
-//    private final LeaveServiceClient leaveServiceClient;
-//    private final NotificationServiceClient notificationServiceClient;
-//    private final SagaInstanceRepository sagaInstanceRepository;
-//
-//    public LeaveRequestSagaOrchestrator(SagaStateService sagaStateService,
-//                                        EmployeeServiceClient employeeServiceClient,
-//                                        ApprovalServiceClient approvalServiceClient,
-//                                        LeaveServiceClient leaveServiceClient,
-//                                        NotificationServiceClient notificationServiceClient,
-//                                        SagaInstanceRepository sagaInstanceRepository) {
-//        this.sagaStateService = sagaStateService;
-//        this.employeeServiceClient = employeeServiceClient;
-//        this.approvalServiceClient = approvalServiceClient;
-//        this.leaveServiceClient = leaveServiceClient;
-//        this.notificationServiceClient = notificationServiceClient;
-//        this.sagaInstanceRepository = sagaInstanceRepository;
-//    }
-//
-//    // Bước 1: Nhân viên nộp đơn
-//    @Transactional // Bọc toàn bộ Saga trong một transaction của LRS, hoặc chia nhỏ hơn
-//    public String startLeaveRequestSaga(CreateLeaveRequestCmd cmd, String authenticatedEmployeeId) {
-//        // Đảm bảo người nộp đơn là người đã xác thực, hoặc là admin/HR tạo hộ
-//        if (!authenticatedEmployeeId.equals(cmd.getRequestingEmployeeId())) {
-//            // Xử lý lỗi ủy quyền
-//            throw new SecurityException("Authenticated user does not match requesting employee.");
-//        }
-//
-//        SagaInstance saga = sagaStateService.createSaga(
-//                "LeaveApprovalSaga",
-//                null, // CorrelationId sẽ là requestId từ ApprovalService
-//                cmd
-//        );
-//        logger.info("Saga {} created for employee {}", saga.getSagaId(), cmd.getRequestingEmployeeId());
-//
-//        try {
-//            // Bước 1.1: Tạo bản ghi yêu cầu nghỉ phép ban đầu trong ApprovalService
-//            sagaStateService.updateSagaState(saga.getSagaId(), "CREATE_LEAVE_REQUEST_IN_APPROVAL", "RUNNING", null);
-//            CreateLeaveRequestInApprovalCmd createApprovalCmd = new CreateLeaveRequestInApprovalCmd(
-//                    cmd.getRequestingEmployeeId(),
-//                    cmd.getLeaveTypeCode(),
-//                    cmd.getStartDate(),
-//                    cmd.getEndDate(),
-//                    cmd.getNumberOfDays(), // Số ngày nhân viên nghĩ họ xin
-//                    cmd.getReason(),
-//                    "PENDING_VALIDATION" // Trạng thái ban đầu
-//            );
-//            ResponseEntity<LeaveRequestStatusDto> approvalResponse = approvalServiceClient.createLeaveRequest(createApprovalCmd);
-//            if (approvalResponse.getStatusCode() != HttpStatus.CREATED || approvalResponse.getBody() == null) {
-//                throw new RuntimeException("Failed to create leave request in ApprovalService. Status: " + approvalResponse.getStatusCode());
-//            }
-//            String leaveRequestId = approvalResponse.getBody().getRequestId();
-//            saga.setCorrelationId(leaveRequestId); // Cập nhật correlationId
-//            sagaStateService.updateSagaState(saga.getSagaId(), "CREATE_LEAVE_REQUEST_IN_APPROVAL", "COMPLETED_SUCCESS", "Request ID: " + leaveRequestId);
-//
-//
-//            // Bước 2 & 4 (PDF): Gọi EmployeeService lấy thông tin NV & Gọi LeaveService kiểm tra hợp lệ
-//            // (gộp làm một bước logic trong Saga)
-//            sagaStateService.updateSagaState(saga.getSagaId(), "VALIDATE_LEAVE_REQUEST", "RUNNING", null);
-//            EmployeeDetailsDto employeeDetails = getE
-//            mployeeDetails(cmd.getRequestingEmployeeId(), saga.getSagaId());
-//            if (employeeDetails.getDirectManagerId() == null) {
-//                sagaStateService.updateSagaState(saga.getSagaId(), "VALIDATE_LEAVE_REQUEST", "FAILED_NO_RETRY", "Employee has no direct manager assigned.");
-//                // Thực hiện bù trừ nếu cần (ví dụ: cập nhật trạng thái request ở ApprovalService thành FAILED)
-//                compensateCreateLeaveRequest(leaveRequestId, saga.getSagaId(), "NO_MANAGER");
-//                return saga.getSagaId(); // Saga kết thúc với lỗi
-//            }
-//
-//            LeaveValidationRequestDto validationRequest = new LeaveValidationRequestDto(
-//                    cmd.getRequestingEmployeeId(),
-//                    cmd.getLeaveTypeCode(),
-//                    cmd.getStartDate().getYear(), // forYear
-//                    cmd.getStartDate(),
-//                    cmd.getEndDate(),
-//                    cmd.getNumberOfDays() // Số ngày NV tự tính, LeaveService sẽ tính lại ngày làm việc
-//            );
-//            ResponseEntity<LeaveValidationResponseDto> validationResponse = leaveServiceClient.validateLeave(validationRequest);
-//            if (validationResponse.getStatusCode() != HttpStatus.OK || validationResponse.getBody() == null) {
-//                throw new RuntimeException("LeaveService validation call failed. Status: " + validationResponse.getStatusCode());
-//            }
-//            LeaveValidationResponseDto validationResult = validationResponse.getBody();
-//
-//            if (!validationResult.isValid()) {
-//                String reasons = String.join(", ", validationResult.getValidationMessages());
-//                sagaStateService.updateSagaState(saga.getSagaId(), "VALIDATE_LEAVE_REQUEST", "FAILED_NO_RETRY", "Validation failed: " + reasons);
-//                updateApprovalRequestStatus(leaveRequestId, "SYSTEM_REJECTED", reasons, saga.getSagaId());
-//                notifyEmployeeOfSystemRejection(cmd.getRequestingEmployeeId(), leaveRequestId, reasons, saga.getSagaId());
-//                return saga.getSagaId(); // Saga kết thúc
-//            }
-//            sagaStateService.updateSagaState(saga.getSagaId(), "VALIDATE_LEAVE_REQUEST", "COMPLETED_SUCCESS", "Remaining: " + validationResult.getCalculatedRemainingDays());
-//
-//            // Bước 5 (PDF): Gửi yêu cầu đến quản lý (Cập nhật ApprovalService và gửi thông báo)
-//            sagaStateService.updateSagaState(saga.getSagaId(), "NOTIFY_MANAGER", "RUNNING", null);
-//            updateApprovalRequestStatus(leaveRequestId, "PENDING_MANAGER_APPROVAL", "Awaiting manager decision.", saga.getSagaId(), employeeDetails.getDirectManagerId());
-//            notifyManagerOfNewRequest(employeeDetails.getDirectManagerId(), employeeDetails.getFullName(), leaveRequestId, saga.getSagaId());
-//            sagaStateService.updateSagaState(saga.getSagaId(), "NOTIFY_MANAGER", "COMPLETED_SUCCESS", null);
-//
-//            sagaStateService.updateSagaState(saga.getSagaId(), "AWAITING_MANAGER_DECISION", "COMPLETED_SUCCESS", null);
-//            return saga.getSagaId();
-//
-//        } catch (Exception e) {
-//            logger.error("Saga {} failed during initiation for employee {}: {}", saga.getSagaId(), cmd.getRequestingEmployeeId(), e.getMessage(), e);
-//            sagaStateService.updateSagaState(saga.getSagaId(), saga.getCurrentSagaStepName(), "FAILED_NEEDS_COMPENSATION", e.getMessage());
-//            // Trigger compensation logic if needed based on current step
-//            if (saga.getCorrelationId() != null && !"CREATE_LEAVE_REQUEST_IN_APPROVAL".equals(saga.getCurrentSagaStepName())) {
-//                compensateCreateLeaveRequest(saga.getCorrelationId(), saga.getSagaId(), "SAGA_INIT_FAILURE");
-//            }
-//            return saga.getSagaId();
-//        }
-//    }
-//
-//
-//    // Bước 8: Quản lý ra quyết định
-//    @Transactional
-//    public void processManagerDecision(String leaveRequestId, ManagerDecisionCmd decisionCmd) {
-//        SagaInstance saga = sagaStateService.getSaga(findSagaByCorrelationId(leaveRequestId)); // Cần hàm tìm saga theo correlationId
-//        if (saga == null || !"AWAITING_MANAGER_DECISION".equals(saga.getCurrentSagaStepName())) {
-//            // Hoặc saga đã hoàn thành, hoặc không đúng trạng thái
-//            logger.warn("Saga not found or not in AWAITING_MANAGER_DECISION state for leaveRequestId: {}", leaveRequestId);
-//            throw new RuntimeException("Invalid saga state for processing manager decision.");
-//        }
-//        sagaStateService.updateSagaState(saga.getSagaId(), "PROCESSING_MANAGER_DECISION", "RUNNING", "Manager ID: " + decisionCmd.getDecidingManagerId());
-//
-//        String employeeId = getEmployeeIdFromLeaveRequest(leaveRequestId, saga.getSagaId()); // Cần lấy employeeId
-//        LeaveRequestStatusDto leaveRequestDetails = getLeaveRequestDetails(leaveRequestId, saga.getSagaId());
-//
-//
-//        if (decisionCmd.getDecision() == DecisionType.APPROVED) {
-//            // Bước 9 & 11 (PDF)
-//            updateApprovalRequestStatus(leaveRequestId, "MANAGER_APPROVED", "Approved by manager.", saga.getSagaId());
-//
-//            // Lấy số ngày làm việc thực tế đã được LeaveService tính toán trước đó, hoặc tính lại nếu cần
-//            // Tốt nhất là lưu kết quả businessDaysInRequest từ LeaveService vào payload của SagaInstance
-//            BigDecimal daysToDeduct = getBusinessDaysFromSagaPayload(saga); // Cần hàm này
-//
-//            UpdateBalanceAndLogHistoryCmd updateCmd = new UpdateBalanceAndLogHistoryCmd(
-//                    employeeId,
-//                    leaveRequestDetails.getRequestedLeaveTypeCode(), // Lấy từ details
-//                    leaveRequestDetails.getPlannedStartDate().getYear(), // Lấy từ details
-//                    daysToDeduct,
-//                    leaveRequestId,
-//                    "Approved by manager", // reason for history
-//                    leaveRequestDetails.getPlannedStartDate(), // Lấy từ details
-//                    leaveRequestDetails.getPlannedEndDate()    // Lấy từ details
-//            );
-//            updateEmployeeLeaveData(updateCmd, saga.getSagaId());
-//            notifyEmployeeOfApproval(employeeId, leaveRequestId, saga.getSagaId());
-//            sagaStateService.updateSagaState(saga.getSagaId(), "PROCESSING_MANAGER_DECISION", "COMPLETED_APPROVED", null);
-//
-//        } else { // REJECTED
-//            // Bước 10 (PDF)
-//            updateApprovalRequestStatus(leaveRequestId, "MANAGER_REJECTED", decisionCmd.getRejectionReason(), saga.getSagaId());
-//            notifyEmployeeOfRejection(employeeId, leaveRequestId, decisionCmd.getRejectionReason(), saga.getSagaId());
-//            sagaStateService.updateSagaState(saga.getSagaId(), "PROCESSING_MANAGER_DECISION", "COMPLETED_REJECTED", null);
-//        }
-//        // Bước 12: Kết thúc quy trình
-//        sagaStateService.updateSagaState(saga.getSagaId(), "FINALIZED", "COMPLETED", "Saga finished.");
-//    }
-//
-//
-//    // --- Helper methods for calling other services and logging saga steps ---
-//    private EmployeeDetailsDto getEmployeeDetails(String employeeId, String sagaId) {
-//        try {
-//            ResponseEntity<EmployeeDetailsDto> response = employeeServiceClient.getEmployeeDetails(employeeId);
-//            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-//                return response.getBody();
-//            }
-//            throw new RuntimeException("Failed to get employee details from EmployeeService. Status: " + response.getStatusCode());
-//        } catch (Exception e) {
-//            sagaStateService.updateSagaState(sagaId, "GET_EMPLOYEE_DETAILS", "FAILED_NEEDS_COMPENSATION", e.getMessage());
-//            logger.error("Saga {}: Error calling EmployeeService for details: {}", sagaId, e.getMessage(), e);
-//            throw e; // Re-throw để transaction rollback hoặc để saga xử lý bù trừ
-//        }
-//    }
-//
-//    private void updateApprovalRequestStatus(String leaveRequestId, String status, String notes, String sagaId, String... approverId) {
-//        try {
-//            UpdateLeaveRequestStatusCmd cmd = new UpdateLeaveRequestStatusCmd();
-//            cmd.setNewStatus(status);
-//            cmd.setNotes(notes);
-//            if (approverId.length > 0 && approverId[0] != null) {
-//                cmd.setAssignedApproverId(approverId[0]); // Nếu cần set người duyệt
-//            }
-//            // Nếu là quyết định của quản lý
-//            if ("MANAGER_APPROVED".equals(status) || "MANAGER_REJECTED".equals(status)) {
-//                cmd.setManagerDecision(status.replace("MANAGER_", "")); // APPROVED or REJECTED
-//                if ("MANAGER_REJECTED".equals(status)) {
-//                    cmd.setManagerRejectionReason(notes);
-//                }
-//            }
-//
-//            approvalServiceClient.updateLeaveRequestStatus(leaveRequestId, cmd);
-//            // Không cần log step ở đây vì sagaStateService.updateSagaState sẽ log
-//        } catch (Exception e) {
-//            sagaStateService.updateSagaState(sagaId, "UPDATE_APPROVAL_STATUS", "FAILED_NEEDS_COMPENSATION", e.getMessage());
-//            logger.error("Saga {}: Error calling ApprovalService to update status: {}", sagaId, e.getMessage(), e);
-//            throw e;
-//        }
-//    }
-//
-//    private void notifyEmployeeOfSystemRejection(String employeeId, String leaveRequestId, String reason, String sagaId) {
-//        // ... (call notificationServiceClient.sendNotification) ...
-//        SendNotificationCmd notificationCmd = new SendNotificationCmd();
-//        notificationCmd.setRecipientIdentifier(employeeId);
-//        notificationCmd.setTemplateCode("LEAVE_REQUEST_SYSTEM_REJECTED");
-//        notificationCmd.setTemplateParameters(Map.of("requestId", leaveRequestId, "reason", reason));
-////        employeeId, // or employee email from EmployeeDetailsDto
-////        "LEAVE_REQUEST_SYSTEM_REJECTED", // Template code
-////        Map.of("requestId", leaveRequestId, "reason", reason) // Template params
-//        safeCallNotificationService(notificationCmd, sagaId, "NOTIFY_EMPLOYEE_SYSTEM_REJECTION");
-//    }
-//
-//    private void notifyManagerOfNewRequest(String managerId, String employeeFullName, String leaveRequestId, String sagaId) {
-//        // ... (get manager email from EmployeeService if not already fetched) ...
-//        // ... (call notificationServiceClient.sendNotification) ...
-//        EmployeeDetailsDto managerDetails = getEmployeeDetails(managerId, sagaId); // Lấy email quản lý
-//        SendNotificationCmd notificationCmd = new SendNotificationCmd();
-//        notificationCmd.setRecipientIdentifier(managerDetails.getEmailAddress());
-//        notificationCmd.setTemplateCode("NEW_LEAVE_REQUEST_FOR_MANAGER");
-//        notificationCmd.setTemplateParameters(Map.of("requestId", leaveRequestId, "employeeName", employeeFullName));
-////        managerDetails.getEmailAddress(),
-////        "NEW_LEAVE_REQUEST_FOR_MANAGER",
-////        Map.of("requestId", leaveRequestId, "employeeName", employeeFullName)
-//        safeCallNotificationService(notificationCmd, sagaId, "NOTIFY_MANAGER_OF_NEW_REQUEST");
-//    }
-//
-//    private void updateEmployeeLeaveData(UpdateBalanceAndLogHistoryCmd cmd, String sagaId) {
-//        try {
-//            employeeServiceClient.updateBalanceAndLogHistory(cmd);
-//        } catch (Exception e) {
-//            sagaStateService.updateSagaState(sagaId, "UPDATE_EMPLOYEE_LEAVE_DATA", "FAILED_NEEDS_COMPENSATION", e.getMessage());
-//            logger.error("Saga {}: Error calling EmployeeService to update balance/history: {}", sagaId, e.getMessage(), e);
-//            // KÍCH HOẠT BÙ TRỪ CHO APPROVAL SERVICE
-//            compensateApproveLeaveRequest(cmd.getOriginalLeaveRequestId(), sagaId, "FAILED_TO_UPDATE_EMPLOYEE_BALANCE");
-//            throw e;
-//        }
-//    }
-//    private void notifyEmployeeOfApproval(String employeeId, String leaveRequestId, String sagaId) {
-//        EmployeeDetailsDto employeeDetails = getEmployeeDetails(employeeId, sagaId);
-//        SendNotificationCmd cmd = new SendNotificationCmd();
-//        cmd.setRecipientIdentifier(employeeDetails.getEmailAddress());
-//        cmd.setTemplateCode("LEAVE_REQUEST_APPROVED_EMP");
-//        cmd.setTemplateParameters(Map.of("requestId", leaveRequestId));
-////        employeeDetails.getEmailAddress(),
-////        "LEAVE_REQUEST_APPROVED_EMP",
-////        Map.of("requestId", leaveRequestId)
-//        safeCallNotificationService(cmd, sagaId, "NOTIFY_EMPLOYEE_APPROVED");
-//    }
-//
-//    private void notifyEmployeeOfRejection(String employeeId, String leaveRequestId, String reason, String sagaId) {
-//        EmployeeDetailsDto employeeDetails = getEmployeeDetails(employeeId, sagaId);
-//        SendNotificationCmd cmd = new SendNotificationCmd();
-//        cmd.setRecipientIdentifier(employeeDetails.getEmailAddress());
-//        cmd.setTemplateCode("LEAVE_REQUEST_REJECTED_EMP");
-//        cmd.setTemplateParameters(Map.of("requestId", leaveRequestId, "reason", reason));
-////        employeeDetails.getEmailAddress(),
-////        "LEAVE_REQUEST_REJECTED_EMP",
-////        Map.of("requestId", leaveRequestId, "reason", reason)
-//        safeCallNotificationService(cmd, sagaId, "NOTIFY_EMPLOYEE_REJECTED");
-//    }
-//
-//    private void safeCallNotificationService(SendNotificationCmd cmd, String sagaId, String stepName) {
-//        try {
-//            notificationServiceClient.sendNotification(cmd);
-//        } catch (Exception e) {
-//            // Gửi thông báo thường không nên làm fail Saga, chỉ log lỗi
-//            logger.error("Saga {}: Failed to send notification for step {}: {}", sagaId, stepName, e.getMessage(), e);
-//            // Không updateSagaState thành FAILED ở đây, trừ khi thông báo là critical
-//        }
-//    }
-//
-//    // --- Compensation methods ---
-//    private void compensateCreateLeaveRequest(String leaveRequestId, String sagaId, String reason) {
-//        logger.warn("Saga {}: Compensating CreateLeaveRequest for requestId {}. Reason: {}", sagaId, leaveRequestId, reason);
-//        sagaStateService.updateSagaState(sagaId, "COMPENSATE_CREATE_LEAVE_REQUEST", "RUNNING", reason);
-//        try {
-//            // Yêu cầu ApprovalService cập nhật trạng thái thành CANCELLED hoặc DELETED
-//            updateApprovalRequestStatus(leaveRequestId, "CANCELLED_BY_SAGA", "Saga compensation: " + reason, sagaId);
-//            sagaStateService.updateSagaState(sagaId, "COMPENSATE_CREATE_LEAVE_REQUEST", "COMPLETED_SUCCESS", null);
-//        } catch (Exception e) {
-//            logger.error("Saga {}: Failed to compensate CreateLeaveRequest for requestId {}: {}", sagaId, leaveRequestId, e.getMessage(), e);
-//            sagaStateService.updateSagaState(sagaId, "COMPENSATE_CREATE_LEAVE_REQUEST", "FAILED_NO_RETRY", e.getMessage());
-//        }
-//    }
-//
-//    private void compensateApproveLeaveRequest(String leaveRequestId, String sagaId, String reason) {
-//        logger.warn("Saga {}: Compensating ApproveLeaveRequest for requestId {}. Reason: {}", sagaId, leaveRequestId, reason);
-//        sagaStateService.updateSagaState(sagaId, "COMPENSATE_APPROVE_LEAVE", "RUNNING", reason);
-//        try {
-//            // 1. Yêu cầu ApprovalService chuyển trạng thái về PENDING_MANAGER_APPROVAL hoặc một trạng thái lỗi
-//            updateApprovalRequestStatus(leaveRequestId, "APPROVAL_COMPENSATION_PENDING", "Saga compensation: " + reason, sagaId);
-//
-//            // 2. (Quan trọng) Hoàn lại số ngày nghỉ đã trừ cho nhân viên
-//            //    Cần thông tin về số ngày đã trừ (lưu trong saga payload hoặc query lại)
-//            //    Và thông tin nhân viên, loại nghỉ, năm
-//            //    UpdateBalanceAndLogHistoryCmd revertCmd = ... (tạo lệnh hoàn trả)
-//            //    employeeServiceClient.updateBalanceAndLogHistory(revertCmd); // API này cần hỗ trợ cộng lại ngày
-//
-//            sagaStateService.updateSagaState(sagaId, "COMPENSATE_APPROVE_LEAVE", "COMPLETED_SUCCESS", "Manual check may be needed for leave balance restoration.");
-//        } catch (Exception e) {
-//            logger.error("Saga {}: Failed to compensate ApproveLeaveRequest for requestId {}: {}", sagaId, leaveRequestId, e.getMessage(), e);
-//            sagaStateService.updateSagaState(sagaId, "COMPENSATE_APPROVE_LEAVE", "FAILED_NO_RETRY", e.getMessage());
-//        }
-//    }
-//
-//
-//    // --- Helper methods to get data for Saga (can be more sophisticated) ---
-//    private String findSagaByCorrelationId(String correlationId) {
-//        // Implement logic in SagaInstanceRepository to find by correlationId
-//        // For now, assuming LRS stores a map or queries DB
-//        // This is a placeholder
-//        List<SagaInstance> sagas = sagaInstanceRepository.findByCorrelationIdAndSagaStatus(correlationId, "AWAITING_MANAGER_DECISION");
-//        if (sagas.isEmpty()) {
-//            sagas = sagaInstanceRepository.findByCorrelationIdAndSagaStatus(correlationId, "RUNNING"); // Có thể đang ở 1 bước khác
-//            if (sagas.isEmpty()) {
-//                throw new ResourceNotFoundException("Active Saga not found for correlationId: " + correlationId);
-//            }
-//        }
-//        if (sagas.size() > 1) {
-//            logger.warn("Multiple active sagas found for correlationId: {}. Using the latest.", correlationId);
-//            // Sắp xếp theo thời gian tạo giảm dần và lấy cái mới nhất
-//            sagas.sort((s1, s2) -> s2.getSagaCreatedAt().compareTo(s1.getSagaCreatedAt()));
-//        }
-//        return sagas.get(0).getSagaId();
-//    }
-//
-//    private String getEmployeeIdFromLeaveRequest(String leaveRequestId, String sagaId) {
-//        // Lấy thông tin này từ ApprovalService hoặc từ Saga payload nếu đã lưu
-//        try {
-//            ResponseEntity<LeaveRequestStatusDto> response = approvalServiceClient.getLeaveRequestStatus(leaveRequestId);
-//            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-//                return response.getBody().getRequestingEmployeeId();
-//            }
-//            throw new RuntimeException("Could not retrieve employeeId for leave request: " + leaveRequestId);
-//        } catch (Exception e) {
-//            sagaStateService.updateSagaState(sagaId, "GET_EMPLOYEE_ID_FROM_REQUEST", "FAILED_NEEDS_COMPENSATION", e.getMessage());
-//            throw e;
-//        }
-//    }
-//
-//    private LeaveRequestStatusDto getLeaveRequestDetails(String leaveRequestId, String sagaId) {
-//        try {
-//            ResponseEntity<LeaveRequestStatusDto> response = approvalServiceClient.getLeaveRequestStatus(leaveRequestId);
-//            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-//                return response.getBody();
-//            }
-//            throw new RuntimeException("Could not retrieve details for leave request: " + leaveRequestId);
-//        } catch (Exception e) {
-//            sagaStateService.updateSagaState(sagaId, "GET_LEAVE_REQUEST_DETAILS", "FAILED_NEEDS_COMPENSATION", e.getMessage());
-//            throw e;
-//        }
-//    }
-//
-//    private BigDecimal getBusinessDaysFromSagaPayload(SagaInstance saga) {
-//        // Cần đọc saga.getSagaPayloadData(), parse JSON và lấy ra số ngày làm việc thực tế
-//        // mà LeaveService đã tính toán và LRS đã lưu vào payload.
-//        // Đây là ví dụ, cần triển khai cụ thể
-//        try {
-//            // Giả sử payload lưu một DTO chứa thông tin này
-//            // ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
-//            // LeaveRequestSagaPayload payload = objectMapper.readValue(saga.getSagaPayloadData(), LeaveRequestSagaPayload.class);
-//            // return payload.getCalculatedBusinessDays();
-//            // Tạm thời trả về giá trị mặc định nếu chưa có logic parse payload
-//            logger.warn("Saga {}: getBusinessDaysFromSagaPayload not fully implemented, returning placeholder. Actual calculation required.", saga.getSagaId());
-//            // Để đơn giản, truy vấn lại ApprovalService để lấy requested_number_of_days
-//            // NHƯNG ĐÂY KHÔNG PHẢI LÀ SỐ NGÀY LÀM VIỆC THỰC TẾ
-//            LeaveRequestStatusDto details = getLeaveRequestDetails(saga.getCorrelationId(), saga.getSagaId());
-//            return details.getRequestedNumberOfDays(); // CẢNH BÁO: Đây là số ngày NV nhập, không phải số ngày làm việc đã tính!
-//        } catch (Exception e) {
-//            logger.error("Saga {}: Error parsing saga payload for business days: {}", saga.getSagaId(), e.getMessage());
-//            throw new RuntimeException("Error getting business days from saga payload for sagaId: " + saga.getSagaId(), e);
-//        }
-//    }
-//}
-
-
-
-
 package com.example.leaverequestservice.service;
 
 import com.example.leaverequestservice.client.*;
@@ -500,12 +95,13 @@ public class LeaveRequestSagaOrchestrator {
             updateSagaStateInternal(saga.getSagaId(), "CREATE_LEAVE_REQUEST_IN_APPROVAL", "RUNNING", null, sagaPayload);
             CreateLeaveRequestInApprovalCmd createApprovalCmd = new CreateLeaveRequestInApprovalCmd();
             createApprovalCmd.setRequestingEmployeeId(requestingEmployeeId);
-            createApprovalCmd.setLeaveTypeCode(cmd.getLeaveTypeCode());
+            createApprovalCmd.setRequestedLeaveTypeCode(cmd.getLeaveTypeCode());
             createApprovalCmd.setPlannedStartDate(cmd.getStartDate());
             createApprovalCmd.setPlannedEndDate(cmd.getEndDate());
-            createApprovalCmd.setRequestedNumberOfDays(cmd.getNumberOfDays());
+        //    createApprovalCmd.setRequestedNumberOfDays(cmd.getNumberOfDays());
             createApprovalCmd.setReasonForLeaveRequest(cmd.getReason());
             createApprovalCmd.setInitialStatus("PENDING_VALIDATION");
+
 
 
             ResponseEntity<LeaveRequestStatusDto> approvalResponse = approvalServiceClient.createLeaveRequest(createApprovalCmd);
@@ -513,7 +109,9 @@ public class LeaveRequestSagaOrchestrator {
                 throw new RuntimeException("Failed to create leave request in ApprovalService. Status: " + approvalResponse.getStatusCode());
             }
             String leaveRequestId = approvalResponse.getBody().getRequestId();
-            saga.setCorrelationId(leaveRequestId); // Rất quan trọng
+            saga.setCorrelationId(leaveRequestId); // Rất quan trọng -- thay thế trong hàm updateSagaStateInternal
+
+
             sagaPayload.setLeaveRequestId(leaveRequestId);
             updateSagaStateInternal(saga.getSagaId(), "CREATE_LEAVE_REQUEST_IN_APPROVAL", "COMPLETED_SUCCESS", "Request ID: " + leaveRequestId, sagaPayload);
 
@@ -526,16 +124,30 @@ public class LeaveRequestSagaOrchestrator {
                 return saga.getSagaId();
             }
             sagaPayload.setEmployeeDetails(employeeDetails);
+            LeaveValidationRequestDto validationRequest = new LeaveValidationRequestDto();
 
-            LeaveValidationRequestDto validationRequest = new LeaveValidationRequestDto(
-                    requestingEmployeeId,
-                    cmd.getLeaveTypeCode(),
-                    cmd.getStartDate().getYear(),
-                    cmd.getStartDate(),
-                    cmd.getEndDate(),
-                    cmd.getNumberOfDays() // Số ngày NV nhập
-            );
-            ResponseEntity<LeaveValidationResponseDto> validationResponse = leaveServiceClient.validateLeave(validationRequest);
+//            LeaveValidationRequestDto validationRequest = new LeaveValidationRequestDto(
+//                    requestingEmployeeId,
+//                    cmd.getLeaveTypeCode(),
+//                    cmd.getStartDate().getYear(),
+//                    cmd.getStartDate(),
+//                    cmd.getEndDate(),
+//                    cmd.getNumberOfDays() // Số ngày NV nhập
+    //        );
+
+            validationRequest.setEmployeeId(requestingEmployeeId);
+            validationRequest.setLeaveTypeCode(cmd.getLeaveTypeCode());
+            validationRequest.setForYear(cmd.getStartDate().getYear());
+            validationRequest.setRequestedStartDate(cmd.getStartDate());
+            validationRequest.setRequestedEndDate(cmd.getEndDate());
+//            validationRequest.setRequestedDaysInputByEmployee(cmd.getNumberOfDays());
+
+
+
+
+            ResponseEntity<LeaveValidationResponseDto> validationResponse = leaveServiceClient.validateLeaveRequest(validationRequest);
+
+
             if (validationResponse.getStatusCode() != HttpStatus.OK || validationResponse.getBody() == null) {
                 throw new RuntimeException("LeaveService validation call failed. Status: " + validationResponse.getStatusCode());
             }
@@ -680,17 +292,19 @@ public class LeaveRequestSagaOrchestrator {
         }
 
         SendNotificationCmd notificationCmd = new SendNotificationCmd();
-        notificationCmd.setRecipientIdentifier(managerDetails.getEmailAddress());
+        notificationCmd.setRecipientIdentifier(managerDetails.getEmailAddress().trim());
         notificationCmd.setTemplateCode("LEAVE_REQUEST_SUBMITTED_TO_MANAGER");
         notificationCmd.setTemplateParameters(Map.of(
+
                 "requestId", Objects.toString(sagaPayload.getLeaveRequestId(), "N/A"),
                 "employeeName", Objects.toString(requestingEmployeeDetails.getFullName(), "N/A"),
                 "leaveTypeName", Objects.toString(sagaPayload.getCreateLeaveRequestCmd().getLeaveTypeCode(), "N/A"),
                 "startDate", Objects.toString(sagaPayload.getCreateLeaveRequestCmd().getStartDate(), "N/A"),
                 "endDate", Objects.toString(sagaPayload.getCreateLeaveRequestCmd().getEndDate(), "N/A"),
-                "numberOfDays", Objects.toString(sagaPayload.getCreateLeaveRequestCmd().getNumberOfDays(), "N/A"),
+                //"numberOfDays", Objects.toString(sagaPayload.getCreateLeaveRequestCmd().getNumberOfDays(), "N/A"),
                 "reason", Objects.toString(sagaPayload.getCreateLeaveRequestCmd().getReason(), "")
         ));
+        notificationCmd.setChannel("EMAIL");
         notificationCmd.setRelatedLeaveRequestId(sagaPayload.getLeaveRequestId());
         notificationCmd.setRelatedSagaId(sagaId);
         safeCallNotificationService(notificationCmd, sagaId, "NOTIFY_MANAGER_OF_NEW_REQUEST");
@@ -721,7 +335,8 @@ public class LeaveRequestSagaOrchestrator {
                 "employeeName", employeeDetails.getFullName(),
                 "leaveTypeName", payload.getCreateLeaveRequestCmd().getLeaveTypeCode(),
                 "startDate", payload.getCreateLeaveRequestCmd().getStartDate().toString(),
-                "endDate", payload.getCreateLeaveRequestCmd().getEndDate().toString()
+                "endDate", payload.getCreateLeaveRequestCmd().getEndDate().toString(),
+                "numberOfDays", payload.getLeaveValidationResponse().getCalculatedBusinessDaysInRequest()
         ));
         cmd.setRelatedLeaveRequestId(leaveRequestId);
         cmd.setRelatedSagaId(sagaId);
@@ -811,9 +426,9 @@ public class LeaveRequestSagaOrchestrator {
     }
 
     private String findSagaByCorrelationIdOrThrow(String correlationId, String expectedStatus) {
-        List<SagaInstance> sagas = sagaInstanceRepository.findByCorrelationIdAndSagaStatus(correlationId, expectedStatus);
+        List<SagaInstance> sagas = sagaInstanceRepository.findByCorrelationIdAndCurrentSagaStepName(correlationId, expectedStatus);
         if (sagas.isEmpty()) {
-            sagas = sagaInstanceRepository.findByCorrelationIdAndSagaStatus(correlationId, "RUNNING");
+            sagas = sagaInstanceRepository.findByCorrelationIdAndCurrentSagaStepName(correlationId, "RUNNING");
             if (sagas.isEmpty()) {
                 throw new ResourceNotFoundException("Active Saga not found or not in expected state for correlationId: " + correlationId + " (expected: " + expectedStatus + " or RUNNING)");
             }
@@ -846,7 +461,7 @@ public class LeaveRequestSagaOrchestrator {
         logger.warn("Saga {}: Calculated business days not found in saga payload. Falling back to originally requested days. THIS IS LIKELY AN ERROR IF LEAVESERVICE WAS EXPECTED TO CALCULATE BUSINESS DAYS.", saga.getSagaId());
         // Fallback nguy hiểm, chỉ nên xảy ra nếu có lỗi logic nghiêm trọng
         if (payload.getCreateLeaveRequestCmd() != null) {
-            return payload.getCreateLeaveRequestCmd().getNumberOfDays();
+            return payload.getLeaveValidationResponse().getCalculatedBusinessDaysInRequest();
         }
         throw new IllegalStateException("Cannot determine days to deduct for saga " + saga.getSagaId());
     }
